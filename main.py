@@ -7,16 +7,16 @@ from processing_utils import *
 
 
 # Load data
-date = '0106'
-time = '1513'
-mocap = load_mocap_log(f'./logs/{date}_{time}_mocap_log.txt', system_delay=-16330)
+date = '0113'
+time = '1948'
+mc = load_mocap_log(f'./logs/{date}_{time}_mocap_log.txt', system_delay=0)
 rs = load_realsense_log(f'./logs/{date}_{time}_realsense_log.txt')
-print(f"Total mocap frames: {len(mocap)}")
+print(f"Total mocap frames: {len(mc)}")
 print(f"Total rs frames: {len(rs)}")
 
 # Remove anomalies in rs
 # 对每一个关键点分别聚类后，删除在eps半径内，邻居数小于min_samples的点
-rs_anomalies, n = detect_marker_anomalies(rs, eps=25, min_samples=20)
+rs_anomalies, n = detect_marker_anomalies(rs, eps=50, min_samples=20)
 rs_anomalies_times = set(time for anomaly in rs_anomalies.values() for time in anomaly)
 print(f"Detected {n} anomalous markers and {len(rs_anomalies_times)} anomalous time in Realsense data.")
 if len(rs_anomalies_times) > 0:
@@ -24,9 +24,9 @@ if len(rs_anomalies_times) > 0:
             del rs[t]
 
 # Filter matched frames
-matched_pairs = find_matching_frames(mocap, rs, threshold=8)
+matched_pairs = find_matching_frames(mc, rs, threshold=10)
 print(f"Matched frame count: {len(matched_pairs)}")
-mocap_matched, rs_matched = filter_matching_data(mocap, rs, matched_pairs)
+mocap_matched, rs_matched = filter_matching_data(mc, rs, matched_pairs)
 
 
 # -------- analyze together --------
@@ -62,4 +62,11 @@ vis = MarkerVisualizer(
     data_dict2=rs_transformed_per_marker, # rs_transformed_per_marker,
     labels1=mocap_labels,
     labels2=rs_labels)
+
+# vis = MarkerVisualizer(
+#     data_dict1=mc,
+#     # data_dict2=rs, # rs_transformed_per_marker,
+#     labels1=mocap_labels,
+#     labels2=rs_labels)
+
 vis.show()

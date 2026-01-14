@@ -40,18 +40,18 @@ def load_realsense_log(path = f'./logs/20250610_realsense_log.txt'):
     with open(path, 'r') as f:
         for line in f:
             parts = line.strip().split(',')
-            ts = int(parts[0]) // 1_000_000    # ns to ms
+            ts = int(parts[0])
             coords = []
-            for j in range(N_MARKERS):
-                base = 1 + j * 3
+            for j in [0, 4, 8, 12, 16, 20]:
+                base = 1 + j * 6
                 try:
-                    X = float(parts[base])
-                    Y = float(parts[base + 1])
-                    Z = float(parts[base + 2])
+                    X = float(parts[base + 3])
+                    Y = float(parts[base + 4])
+                    Z = float(parts[base + 5])
                 except (IndexError, ValueError):
                     break
                 # skip invalid zeros
-                if X == 0.0 or Y == 0.0 or Z == 0.0:
+                if Z == 0.0:
                     continue
                 coords.append([X * 1000, Y * 1000, Z * 1000]) # m to mm
             if len(coords) == N_MARKERS:
@@ -71,7 +71,7 @@ def _get_marker_order_auto(arr):
     assert arr.shape[0] == N_MARKERS, f"Expected exactly {N_MARKERS} markers"
 
     # wrist = point with minimum x
-    wrist_idx = np.argmin(arr[:, 0])
+    wrist_idx = int(np.argmin(arr[:, 0]))
 
     # sort remaining by y descending
     remaining = [i for i in range(6) if i != wrist_idx]
@@ -82,5 +82,6 @@ def _get_marker_order_auto(arr):
     )
 
     order = [wrist_idx] + remaining_sorted
+    print(order)
 
     return order
