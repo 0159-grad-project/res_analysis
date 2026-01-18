@@ -1,6 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.widgets import Slider, TextBox, CheckButtons
+from matplotlib.widgets import Slider, TextBox, CheckButtons, Button
 
 from config import *
 
@@ -25,7 +25,7 @@ class MarkerVisualizer:
         self.marker_style2 = '*' if data_dict2 else None
 
         self.timestamps = sorted(data_dict1.keys())
-        self.ts_map = {ts % 100000: ts for ts in self.timestamps}
+        self.timestamp_to_index = {t: i for i, t in enumerate(self.timestamps)}
 
         # Visibility flags
         self.show_mocap = True
@@ -39,7 +39,7 @@ class MarkerVisualizer:
         plt.subplots_adjust(bottom=0.25 if self.data2 else 0.2)
 
         ax_jump = plt.axes([0.45, 0.11, 0.2, 0.04])
-        self.jump_box = TextBox(ax_jump, 'Go to Timestamp (last 5 digits)', initial=str(self.timestamps[0] % 100000))
+        self.jump_box = TextBox(ax_jump, 'Go to Timestamp', initial=str(self.timestamps[0]))
         self.jump_box.on_submit(self._jump_to_timestamp)
 
         # Initialize markers and lines
@@ -66,9 +66,9 @@ class MarkerVisualizer:
         self.ax.legend(loc='upper left', bbox_to_anchor=(1.2, 1))
 
         # Slider
-        ax_slider = plt.axes([0.45, 0.01, 0.2, 0.04])
+        ax_slider = plt.axes([0.2, 0.05, 0.6, 0.04])
         self.slider = Slider(
-            ax_slider, 'Time (last 5 digits)',
+            ax_slider, 't (ms)',
             valmin=self.timestamps[0],
             valmax=self.timestamps[-1],
             valinit=self.timestamps[0],
@@ -76,9 +76,17 @@ class MarkerVisualizer:
         )
         self.slider.on_changed(self._update)
 
+        # Prev/Next buttons
+        ax_prev = plt.axes([0.25, 0.1, 0.05, 0.03])
+        ax_next = plt.axes([0.7, 0.1, 0.05, 0.03])
+        self.btn_prev = Button(ax_prev, "<")
+        self.btn_next = Button(ax_next, ">")
+        self.btn_prev.on_clicked(self._on_prev)
+        self.btn_next.on_clicked(self._on_next)
+
         # Check buttons only if both datasets exist
         if self.data2:
-            ax_check = plt.axes([0.8, 0.01, 0.15, 0.10])
+            ax_check = plt.axes([0.7, 0.15, 0.15, 0.10])
             self.check = CheckButtons(ax_check, ['Show Mocap', 'Show Realsense'], [True, True])
             self.check.on_clicked(self._toggle_visibility)
 
@@ -148,16 +156,36 @@ class MarkerVisualizer:
 
     def _jump_to_timestamp(self, text):
         try:
-            short_ts = int(text)
-            long_ts = self.ts_map.get(short_ts)
-            if long_ts:
-                self.slider.set_val(long_ts)
+            timestamp = int(text)
+            if timestamp in self.timestamps:
+                self.slider.set_val(timestamp)
             else:
-                closest = min(self.timestamps, key=lambda t: abs(t - short_ts))
+                closest = min(self.timestamps, key=lambda t: abs(t - timestamp))
                 print(f"Timestamp not found. Jumping to closest: {closest}")
                 self.slider.set_val(closest)
         except ValueError:
             print("Invalid timestamp input.")
+
+    def _get_current_index(self):
+        current = int(round(self.slider.val))
+        idx = self.timestamp_to_index.get(current)
+        if idx is None:
+            idx = min(range(len(self.timestamps)), key=lambda i: abs(self.timestamps[i] - current))
+        return idx
+
+    def _step_frame(self, direction):
+        if not self.timestamps:
+            return
+        idx = self._get_current_index()
+        next_idx = min(max(idx + direction, 0), len(self.timestamps) - 1)
+        if next_idx != idx:
+            self.slider.set_val(self.timestamps[next_idx])
+
+    def _on_prev(self, _event):
+        self._step_frame(-1)
+
+    def _on_next(self, _event):
+        self._step_frame(1)
 
     def show(self):
         plt.show()
