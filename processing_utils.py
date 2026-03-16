@@ -2,7 +2,7 @@ import numpy as np
 from bisect import bisect_left
 from sklearn.cluster import DBSCAN
 
-from config import *
+import config
 
 def find_nearest_timestamp(ts_list, target):
     """
@@ -84,7 +84,7 @@ def compute_rigid_transform(A_dict, B_dict):
 
 def apply_rigid_transform(A_dict, R, t):
     """
-    Apply rigid-body transform (R, t) to each 6x3 coordinate array in A_dict.
+    Apply rigid-body transform (R, t) to each coordinate array in A_dict.
 
     Args:
         A_dict: dict[timestamp] -> array-like of shape (n_markers, 3)
@@ -97,7 +97,7 @@ def apply_rigid_transform(A_dict, R, t):
     transformed = {}
     for ts, pts in A_dict.items():
         # ensure pts is an (n_markers, 3) array
-        arr = np.asarray(pts)                     # shape (6,3)
+        arr = np.asarray(pts)                     # shape (n_markers, 3)
         arr_trans = (R @ arr.T).T + t             # apply R then t
         transformed[ts] = arr_trans               # store back
     return transformed
@@ -121,7 +121,7 @@ def compute_rigid_transforms_per_marker(A_dict, B_dict):
     assert set(keys) == set(B_dict.keys()), "Mismatch in timestamps"
     
     transforms = {}
-    for i in range(N_MARKERS):
+    for i in range(config.N_MARKERS):
         # stack marker i across time
         A_i = np.vstack([A_dict[t][i] for t in keys])   # shape (N,3)
         B_i = np.vstack([B_dict[t][i] for t in keys])   # shape (N,3)
@@ -169,9 +169,9 @@ def compute_detailed_errors(mocap_vec, rs_vec, print_summary=True):
     errors = np.linalg.norm(rs_vec - mocap_vec, axis=1)  # shape (N * n_markers,)
     error_summary = {}
 
-    for i in range(N_MARKERS):  # marker index 0 to n_markers
-        marker_errors = errors[i::N_MARKERS]
-        error_summary[f"{NAMES[i]}"] = {
+    for i in range(config.N_MARKERS):  # marker index 0 to n_markers
+        marker_errors = errors[i::config.N_MARKERS]
+        error_summary[f"{config.NAMES[i]}"] = {
             "mean": marker_errors.mean(),
             "std": marker_errors.std(),
             "max": marker_errors.max(),
@@ -197,7 +197,7 @@ def detect_marker_anomalies(data_dict, *,
                             metric='euclidean'):
     timestamps = sorted(data_dict.keys())
     trajectories = {i: np.vstack([data_dict[t][i] for t in timestamps])
-                    for i in range(N_MARKERS)}
+                    for i in range(config.N_MARKERS)}
 
     anomalies = {}
     num = 0

@@ -1,15 +1,28 @@
-import numpy as np
+num_hands = 2
+date = '0122'
+time = '2023'
+system_delay=0
 
-from config import *
-from visualizer import *
-from acquisition_utils import *
-from processing_utils import *
+import numpy as np
+import config
+config.configure(num_hands=num_hands)
+
+from acquisition_utils import load_mocap_log, load_realsense_log
+from processing_utils import (
+    apply_rigid_transform,
+    apply_rigid_transforms_per_marker,
+    compute_detailed_errors,
+    compute_rigid_transform,
+    compute_rigid_transforms_per_marker,
+    detect_marker_anomalies,
+    filter_matching_data,
+    find_matching_frames,
+)
+from visualizer import MarkerVisualizer
 
 
 # Load data
-date = '0113'
-time = '1948'
-mc = load_mocap_log(f'./logs/{date}_{time}_mocap_log.txt', system_delay=0)
+mc = load_mocap_log(f'./logs/{date}_{time}_mocap_log.txt', system_delay=system_delay)
 rs = load_realsense_log(f'./logs/{date}_{time}_realsense_log.txt')
 print(f"Total mocap frames: {len(mc)}")
 print(f"Total rs frames: {len(rs)}")
@@ -54,8 +67,8 @@ error_stats = compute_detailed_errors(mocap_vec, rs_vec)
 # plot_marker_error_histogram(error_stats)
 
 
-rs_labels = ["(rs)" + n for n in NAMES]
-mocap_labels = ["(mc)" + n for n in NAMES]
+rs_labels = ["(rs)" + n for n in config.NAMES]
+mocap_labels = ["(mc)" + n for n in config.NAMES]
 
 vis = MarkerVisualizer(
     data_dict1=mocap_matched,

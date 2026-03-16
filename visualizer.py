@@ -2,7 +2,18 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider, TextBox, CheckButtons, Button
 
-from config import *
+import config
+
+PRIMARY_HAND_COLORS = ["red", "green", "blue", "orange", "purple", "cyan"]
+SECONDARY_HAND_COLORS = [
+    "tab:brown",
+    "tab:pink",
+    "tab:olive",
+    "tab:gray",
+    "tab:blue",
+    "tab:orange",
+]
+
 
 def plot_marker_error_histogram(error_summary):
     for marker, stats in error_summary.items():
@@ -17,12 +28,13 @@ class MarkerVisualizer:
     def __init__(self, data_dict1, data_dict2=None, labels1=None, labels2=None):
         self.data1 = data_dict1
         self.data2 = data_dict2
-        self.labels1 = labels1 if labels1 else [f'Marker {i}' for i in range(N_MARKERS)]
-        self.labels2 = labels2 if labels2 else [f'Marker {i}' for i in range(N_MARKERS)]
+        self.labels1 = labels1 if labels1 else [f'Marker {i}' for i in range(config.N_MARKERS)]
+        self.labels2 = labels2 if labels2 else [f'Marker {i}' for i in range(config.N_MARKERS)]
 
-        self.colors = ['red', 'green', 'blue', 'orange', 'purple', 'cyan']
+        self.colors = _build_colors()
         self.marker_style1 = 'o'
         self.marker_style2 = '*' if data_dict2 else None
+        self.link_pairs = _build_link_pairs()
 
         self.timestamps = sorted(data_dict1.keys())
         self.timestamp_to_index = {t: i for i, t in enumerate(self.timestamps)}
@@ -94,8 +106,8 @@ class MarkerVisualizer:
         markers = []
         lines = []
         ts0 = self.timestamps[0]
-        points = data.get(ts0, np.full((6, 3), np.nan))
-        for i in range(6):
+        points = data.get(ts0, np.full((config.N_MARKERS, 3), np.nan))
+        for i in range(config.N_MARKERS):
             pt = points[i]
             scatter = self.ax.scatter(
                 pt[0], pt[1], pt[2],
@@ -104,37 +116,37 @@ class MarkerVisualizer:
                 label=f"{labels[i]} ({marker_style})"
             )
             markers.append(scatter)
-        for i in range(1, 6):
+        for wrist_idx, finger_idx in self.link_pairs:
             line, = self.ax.plot(
-                [points[0, 0], points[i, 0]],
-                [points[0, 1], points[i, 1]],
-                [points[0, 2], points[i, 2]],
-                color=self.colors[i], linestyle='--', linewidth=1.2
+                [points[wrist_idx, 0], points[finger_idx, 0]],
+                [points[wrist_idx, 1], points[finger_idx, 1]],
+                [points[wrist_idx, 2], points[finger_idx, 2]],
+                color=self.colors[finger_idx], linestyle='--', linewidth=1.2
             )
             lines.append(line)
         return markers, lines
 
     def _update(self, val):
         timestamp = int(val)
-        pts1 = self.data1.get(timestamp, np.full((6, 3), np.nan))
+        pts1 = self.data1.get(timestamp, np.full((config.N_MARKERS, 3), np.nan))
 
-        for i in range(6):
+        for i in range(config.N_MARKERS):
             self.markers1[i]._offsets3d = ([pts1[i, 0]], [pts1[i, 1]], [pts1[i, 2]])
             self.markers1[i].set_visible(self.show_mocap)
-        for i in range(1, 6):
-            self.lines1[i - 1].set_data([pts1[0, 0], pts1[i, 0]], [pts1[0, 1], pts1[i, 1]])
-            self.lines1[i - 1].set_3d_properties([pts1[0, 2], pts1[i, 2]])
-            self.lines1[i - 1].set_visible(self.show_mocap)
+        for line, (wrist_idx, finger_idx) in zip(self.lines1, self.link_pairs):
+            line.set_data([pts1[wrist_idx, 0], pts1[finger_idx, 0]], [pts1[wrist_idx, 1], pts1[finger_idx, 1]])
+            line.set_3d_properties([pts1[wrist_idx, 2], pts1[finger_idx, 2]])
+            line.set_visible(self.show_mocap)
 
         if self.data2:
-            pts2 = self.data2.get(timestamp, np.full((6, 3), np.nan))
-            for i in range(6):
+            pts2 = self.data2.get(timestamp, np.full((config.N_MARKERS, 3), np.nan))
+            for i in range(config.N_MARKERS):
                 self.markers2[i]._offsets3d = ([pts2[i, 0]], [pts2[i, 1]], [pts2[i, 2]])
                 self.markers2[i].set_visible(self.show_rs)
-            for i in range(1, 6):
-                self.lines2[i - 1].set_data([pts2[0, 0], pts2[i, 0]], [pts2[0, 1], pts2[i, 1]])
-                self.lines2[i - 1].set_3d_properties([pts2[0, 2], pts2[i, 2]])
-                self.lines2[i - 1].set_visible(self.show_rs)
+            for line, (wrist_idx, finger_idx) in zip(self.lines2, self.link_pairs):
+                line.set_data([pts2[wrist_idx, 0], pts2[finger_idx, 0]], [pts2[wrist_idx, 1], pts2[finger_idx, 1]])
+                line.set_3d_properties([pts2[wrist_idx, 2], pts2[finger_idx, 2]])
+                line.set_visible(self.show_rs)
 
         self.ax.set_title(f"Timestamp: {timestamp} ms")
         self.fig.canvas.draw_idle()
@@ -189,3 +201,21 @@ class MarkerVisualizer:
 
     def show(self):
         plt.show()
+
+
+def _build_colors():
+    if config.NUM_HANDS == 1:
+        return PRIMARY_HAND_COLORS.copy()
+    if config.NUM_HANDS == 2:
+        return PRIMARY_HAND_COLORS + SECONDARY_HAND_COLORS
+
+    raise ValueError(f"Unsupported num_hands={config.NUM_HANDS}. Expected 1 or 2.")
+
+
+def _build_link_pairs():
+    markers_per_hand = config.N_MARKERS // config.NUM_HANDS
+    return [
+        (hand_idx * markers_per_hand, hand_idx * markers_per_hand + finger_idx)
+        for hand_idx in range(config.NUM_HANDS)
+        for finger_idx in range(1, markers_per_hand)
+    ]
