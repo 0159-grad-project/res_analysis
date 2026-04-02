@@ -126,16 +126,8 @@ def _get_two_hand_marker_order(arr):
     ]
     remaining_sorted = sorted(remaining, key=lambda i: arr[i, 1], reverse=True)
 
-    markers_per_hand = config.N_MARKERS // config.NUM_HANDS
-    finger_markers_per_hand = markers_per_hand - 1
-    expected_finger_markers = finger_markers_per_hand * config.NUM_HANDS
-    if len(remaining_sorted) != expected_finger_markers:
-        raise ValueError(
-            f"Expected {expected_finger_markers} finger markers after removing wrists."
-        )
-
-    left_fingers = remaining_sorted[:finger_markers_per_hand]
-    right_fingers = remaining_sorted[finger_markers_per_hand:]
+    left_fingers = remaining_sorted[:5]
+    right_fingers = remaining_sorted[5:]
 
     left_fingers_thumb_to_pinky = list(reversed(left_fingers))
     order = (
