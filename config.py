@@ -22,24 +22,12 @@ TWO_HAND_NAMES = [
     "right_pinky_tip",
 ]
 
-NUM_HANDS = 1
-N_MARKERS = len(SINGLE_HAND_NAMES)
-NAMES = SINGLE_HAND_NAMES.copy()
-
-
-def configure(num_hands=1):
-    global NUM_HANDS, N_MARKERS, NAMES
-
+def get_marker_names(num_hands=1):
     if num_hands == 1:
-        names = SINGLE_HAND_NAMES
-    elif num_hands == 2:
-        names = TWO_HAND_NAMES
-    else:
-        raise ValueError(f"Unsupported num_hands={num_hands}. Expected 1 or 2.")
+        return SINGLE_HAND_NAMES.copy()
+    if num_hands == 2:
+        return TWO_HAND_NAMES.copy()
 
-    NUM_HANDS = num_hands
-    NAMES = names.copy()
-    N_MARKERS = len(NAMES)
+    raise ValueError(f"Unsupported num_hands={num_hands}. Expected 1 or 2.")
 
 
-configure()

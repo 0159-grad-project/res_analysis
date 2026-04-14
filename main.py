@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 
 import config
-config.configure(num_hands=num_hands)
+MARKER_NAMES = config.get_marker_names(num_hands)
 
 from acquisition_utils import load_mocap_log, load_realsense_log
 from fusion_utils import analyze_weighted_fusion
@@ -81,7 +81,10 @@ def analyze_camera(mc_data, camera_idx):
     if not rs_path.exists():
         raise FileNotFoundError(f"Missing Realsense log: {rs_path}")
 
-    rs_data = load_realsense_log(str(rs_path))
+    rs_data = load_realsense_log(
+        str(rs_path),
+        num_hands=num_hands,
+    )
 
     print(f"\n=== {camera_label} vs mocap ===")
     print(f"Total {camera_label} frames: {len(rs_data)}")
@@ -123,7 +126,10 @@ def analyze_camera(mc_data, camera_idx):
 
     transform = None
     if ALIGNMENT_MODE == "per_marker":
-        transform = compute_rigid_transforms_per_marker(rs_calibration, mocap_calibration)
+        transform = compute_rigid_transforms_per_marker(
+            rs_calibration,
+            mocap_calibration,
+        )
         rs_transformed_all = apply_rigid_transforms_per_marker(rs_data, transform)
     elif ALIGNMENT_MODE == "per_camera":
         rotation, translation = compute_rigid_transform(rs_calibration, mocap_calibration)
@@ -142,7 +148,7 @@ def analyze_camera(mc_data, camera_idx):
     mocap_vec = np.vstack(list(mocap_evaluation.values()))
     rs_vec = np.vstack(list(rs_transformed.values()))
 
-    error_stats = compute_detailed_errors(mocap_vec, rs_vec)
+    error_stats = compute_detailed_errors(mocap_vec, rs_vec, MARKER_NAMES)
     errors = np.linalg.norm(rs_vec - mocap_vec, axis=1)
     weight_error_stats = error_stats
     if CALIBRATION_RATIO is not None:
@@ -151,6 +157,7 @@ def analyze_camera(mc_data, camera_idx):
         weight_error_stats = compute_detailed_errors(
             calibration_mocap_vec,
             calibration_rs_vec,
+            MARKER_NAMES,
             print_summary=False,
         )
 
@@ -177,7 +184,7 @@ mocap_path = get_mocap_log_path()
 if not mocap_path.exists():
     raise FileNotFoundError(f"Missing mocap log: {mocap_path}")
 
-mc = load_mocap_log(str(mocap_path), system_delay=system_delay)
+mc = load_mocap_log(str(mocap_path), num_hands=num_hands, system_delay=system_delay)
 print(f"Total mocap frames: {len(mc)}")
 
 camera_indices = [1] if num_cameras == 1 else [1, 2]
@@ -188,15 +195,16 @@ if num_cameras == 2:
     fused_result = analyze_weighted_fusion(
         camera_results,
         mc,
+        MARKER_NAMES,
         pair_threshold_ms=CAMERA_PAIR_THRESHOLD_MS,
         mocap_interp_max_gap_ms=MOCAP_INTERP_MAX_GAP_MS,
     )
 
 
 if show_visualizer:
-    mocap_labels = ["(mc)" + name for name in config.NAMES]
-    rs_labels = ["(rs)" + name for name in config.NAMES]
-    fused_labels = ["(fused)" + name for name in config.NAMES]
+    mocap_labels = ["(mc)" + name for name in MARKER_NAMES]
+    rs_labels = ["(rs)" + name for name in MARKER_NAMES]
+    fused_labels = ["(fused)" + name for name in MARKER_NAMES]
     visualized_result = camera_results[0]
     visualized_labels = rs_labels
 
@@ -211,5 +219,6 @@ if show_visualizer:
         data_dict2=visualized_result["fused_points"] if num_cameras == 2 else visualized_result["rs_transformed"],
         labels1=mocap_labels,
         labels2=visualized_labels,
+        num_hands=num_hands,
     )
     vis.show()

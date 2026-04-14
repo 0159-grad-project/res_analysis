@@ -1,50 +1,56 @@
 import ast
-import numpy as np
 
-import config
+import numpy as np
 
 RS_MARKER_INDICES = [0, 4, 8, 12, 16, 20]
 RS_HAND_OFFSET = 21
 
 
-def load_mocap_log(path, system_delay=-16500):
+def load_mocap_log(path, num_hands, system_delay):
     """
-    Load mocap_log.txt, returns dict: timestamp_ms -> np.array shape (config.N_MARKERS, 3)
-    Reorders points to match NAMES in config.py.
+    Load mocap log data as {timestamp_ms: np.ndarray[n_markers, 3]}.
+
+    Points are reordered once based on the first valid frame so they match
+    the marker layout configured in config.py.
     """
     mocap_data = {}
-    order = None
-    defined_order = False
-    with open(path, 'r') as f:
+    marker_order = None
+    expected_markers = 6 * num_hands
+
+    with open(path, "r", encoding="utf-8") as f:
         for line in f:
             entry = ast.literal_eval(line)
-            for ts_str, coords in entry.items():
-                if ts_str is None or None in coords:
+            for timestamp, coords in entry.items():
+                if timestamp is None or coords is None:
                     continue
-                ts = int(ts_str)
-                arr = np.array(coords, dtype=float)
-                if arr.shape[0] != config.N_MARKERS:
+                if any(point is None or None in point for point in coords):
                     continue
 
-                # Reorder to the marker order configured in config.py.
-                if not defined_order:
-                    order = _get_marker_order_auto(arr)
-                    defined_order = True
-                arr = arr[order]
-                mocap_data[ts + system_delay] = arr
+                points = np.asarray(coords, dtype=float)
+                if points.shape != (expected_markers, 3):
+                    continue
+
+                if marker_order is None:
+                    marker_order = get_mocap_marker_order(points, num_hands)
+
+                mocap_data[int(timestamp) + system_delay] = points[marker_order]
+
+    if not mocap_data:
+        raise ValueError(f"No valid mocap frames loaded from {path}.")
 
     return mocap_data
 
-def load_realsense_log(path=f'./logs/20250610_realsense_log.txt'):
+def load_realsense_log(path, num_hands):
     """
-    Load realsense_log.txt, returns dict: timestamp_ms -> np.array shape (config.N_MARKERS, 3)
-    Converts meters -> millimeters and reorders to match NAMES in config.py.
+    Load realsense_log.txt, returns dict: timestamp_ms -> np.array shape (n_markers, 3).
+    Converts meters -> millimeters and keeps the original selected-landmark logic.
     """
     rs_data = {}
-    rs_ordered_indices = _get_rs_ordered_indices()
-    with open(path, 'r') as f:
+    expected_markers = 6 * num_hands
+    rs_ordered_indices = get_rs_ordered_indices(num_hands)
+    with open(path, "r", encoding="utf-8") as f:
         for line in f:
-            parts = line.strip().split(',')
+            parts = line.strip().split(",")
             ts = int(parts[0])
             coords = []
             invalid = False
@@ -61,82 +67,55 @@ def load_realsense_log(path=f'./logs/20250610_realsense_log.txt'):
                     invalid = True
                     break
                 coords.append([X * 1000, Y * 1000, Z * 1000])
-            if not invalid and len(coords) == config.N_MARKERS:
+            if not invalid and len(coords) == expected_markers:
                 rs_data[ts] = np.array(coords)
     return rs_data
 
 
-def _get_marker_order_auto(arr):
+def get_mocap_marker_order(points, num_hands):
     """
-    arr: np.ndarray, shape (config.N_MARKERS, 3), columns = [x, y, z]
+    Infer the mocap marker order from one valid frame.
 
-    Returns:
-        order: list[int]
-        such that arr[order] matches NAMES from config.py.
+    Returns a list of indices that reorders the raw mocap points into the
+    marker order configured in config.py.
     """
-    assert arr.shape[0] == config.N_MARKERS, (
-        f"Expected exactly {config.N_MARKERS} markers"
-    )
+    if num_hands == 1:
+        wrist_idx = int(np.argmin(points[:, 0]))
+        remaining = [i for i in range(points.shape[0]) if i != wrist_idx]
+        remaining_sorted = sorted(remaining, key=lambda i: points[i, 1])
+        return [wrist_idx] + [int(i) for i in remaining_sorted]
 
-    if config.NUM_HANDS == 1:
-        return _get_single_hand_marker_order(arr)
-    if config.NUM_HANDS == 2:
-        return _get_two_hand_marker_order(arr)
+    if num_hands == 2:
+        x_sorted = np.argsort(points[:, 0])
+        wrist_candidates = x_sorted[:2]
+        left_wrist_idx, right_wrist_idx = sorted(
+            wrist_candidates,
+            key=lambda i: points[i, 1],
+            reverse=True,
+        )
 
-    raise ValueError(f"Unsupported num_hands={config.NUM_HANDS}. Expected 1 or 2.")
+        remaining = [
+            i
+            for i in range(points.shape[0])
+            if i not in (left_wrist_idx, right_wrist_idx)
+        ]
+        remaining_sorted = sorted(remaining, key=lambda i: points[i, 1], reverse=True)
+        left_fingers = remaining_sorted[:5]
+        right_fingers = remaining_sorted[5:]
+
+        return (
+            [int(left_wrist_idx)]
+            + [int(i) for i in reversed(left_fingers)]
+            + [int(right_wrist_idx)]
+            + [int(i) for i in right_fingers]
+        )
+
+    raise ValueError(f"Unsupported num_hands={num_hands}. Expected 1 or 2.")
 
 
-def _get_rs_ordered_indices():
+def get_rs_ordered_indices(num_hands):
     ordered_indices = []
-
-    for hand_idx in range(config.NUM_HANDS):
+    for hand_idx in range(num_hands):
         hand_offset = hand_idx * RS_HAND_OFFSET
         ordered_indices.extend(hand_offset + idx for idx in RS_MARKER_INDICES)
-
     return ordered_indices
-
-
-def _get_single_hand_marker_order(arr):
-    wrist_idx = int(np.argmin(arr[:, 0]))
-
-    remaining = [i for i in range(config.N_MARKERS) if i != wrist_idx]
-    remaining_sorted = sorted(
-        remaining,
-        key=lambda i: arr[i, 1],
-        reverse=False
-    )
-
-    order = [wrist_idx] + remaining_sorted
-    order = [int(i) for i in order]
-    print(order)
-
-    return order
-
-
-def _get_two_hand_marker_order(arr):
-    x_sorted = np.argsort(arr[:, 0])
-    wrist_candidates = x_sorted[:2]
-    left_wrist_idx, right_wrist_idx = sorted(
-        wrist_candidates, key=lambda i: arr[i, 1], reverse=True
-    )
-
-    remaining = [
-        i for i in range(config.N_MARKERS)
-        if i not in (left_wrist_idx, right_wrist_idx)
-    ]
-    remaining_sorted = sorted(remaining, key=lambda i: arr[i, 1], reverse=True)
-
-    left_fingers = remaining_sorted[:5]
-    right_fingers = remaining_sorted[5:]
-
-    left_fingers_thumb_to_pinky = list(reversed(left_fingers))
-    order = (
-        [left_wrist_idx]
-        + left_fingers_thumb_to_pinky
-        + [right_wrist_idx]
-        + right_fingers
-    )
-    order = [int(i) for i in order]
-    print(order)
-
-    return order

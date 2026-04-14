@@ -2,7 +2,6 @@
 
 import numpy as np
 
-import config
 from processing_utils import evaluate_predictions, interpolate_points_at_timestamp
 
 
@@ -52,12 +51,12 @@ def pair_timestamps_one_to_one(timestamps_a, timestamps_b, *, threshold_ms=30):
     return pairs
 
 
-def _compute_marker_rms_errors(camera_result):
+def _compute_marker_rms_errors(camera_result, marker_names):
     """将单相机下每个 marker 的误差汇总成 RMS，用于后续加权。"""
     rms_errors = []
     error_source = camera_result.get("weight_error_stats", camera_result["error_stats"])
 
-    for marker_name in config.NAMES:
+    for marker_name in marker_names:
         marker_errors = np.asarray(error_source[marker_name]["all"], dtype=float)
         rms = np.sqrt(np.mean(marker_errors ** 2))
         rms_errors.append(rms)
@@ -65,20 +64,29 @@ def _compute_marker_rms_errors(camera_result):
     return np.asarray(rms_errors, dtype=float)
 
 
-def _compute_camera_marker_weights(camera_results, *, epsilon=1e-6):
+def _compute_camera_marker_weights(camera_results, marker_names, *, epsilon=1e-6):
     """将每个 marker 的 RMS 误差转换成类似逆方差形式的融合权重。"""
     weights = []
 
     for camera_result in camera_results:
-        rms_errors = _compute_marker_rms_errors(camera_result)
+        rms_errors = _compute_marker_rms_errors(camera_result, marker_names)
         weights.append(1.0 / np.maximum(rms_errors ** 2, epsilon))
 
     return weights
 
 
-def _compute_disagreement_thresholds(camera_results, *, gate_scale=2.5, min_threshold_mm=15.0):
+def _compute_disagreement_thresholds(
+    camera_results,
+    marker_names,
+    *,
+    gate_scale=2.5,
+    min_threshold_mm=15.0,
+):
     """为每个 marker 设置分歧阈值，用来判断两台相机是否偏差过大。"""
-    rms_stack = np.vstack([_compute_marker_rms_errors(result) for result in camera_results])
+    rms_stack = np.vstack([
+        _compute_marker_rms_errors(result, marker_names)
+        for result in camera_results
+    ])
     return np.maximum(min_threshold_mm, gate_scale * rms_stack.max(axis=0))
 
 
@@ -109,7 +117,14 @@ def _fuse_weighted_points(camera_points, marker_weights, disagreement_thresholds
     return fused_points
 
 
-def analyze_weighted_fusion(camera_results, mocap_data, *, pair_threshold_ms=30, mocap_interp_max_gap_ms=100):
+def analyze_weighted_fusion(
+    camera_results,
+    mocap_data,
+    marker_names,
+    *,
+    pair_threshold_ms=30,
+    mocap_interp_max_gap_ms=100,
+):
     """
     对双相机流做时间配对，在融合时刻上插值 mocap，并计算融合误差。
 
@@ -129,8 +144,8 @@ def analyze_weighted_fusion(camera_results, mocap_data, *, pair_threshold_ms=30,
     if not paired_timestamps:
         raise ValueError("No paired camera frames found for fusion.")
 
-    marker_weights = _compute_camera_marker_weights(camera_results)
-    disagreement_thresholds = _compute_disagreement_thresholds(camera_results)
+    marker_weights = _compute_camera_marker_weights(camera_results, marker_names)
+    disagreement_thresholds = _compute_disagreement_thresholds(camera_results, marker_names)
 
     mocap_reference = {}
     fused_points = {}
@@ -173,6 +188,7 @@ def analyze_weighted_fusion(camera_results, mocap_data, *, pair_threshold_ms=30,
         paired_eval = evaluate_predictions(
             mocap_reference,
             prediction_dict,
+            marker_names,
             print_summary=False,
         )
         paired_eval["camera_label"] = camera_result["camera_label"]
@@ -183,6 +199,7 @@ def analyze_weighted_fusion(camera_results, mocap_data, *, pair_threshold_ms=30,
     fused_eval = evaluate_predictions(
         mocap_reference,
         fused_points,
+        marker_names,
         print_summary=True,
     )
 

@@ -1,8 +1,8 @@
-import numpy as np
 from bisect import bisect_left
+
+import numpy as np
 from sklearn.cluster import DBSCAN
 
-import config
 
 def find_nearest_timestamp(ts_list, target):
     """
@@ -19,6 +19,7 @@ def find_nearest_timestamp(ts_list, target):
     before = ts_list[pos - 1]
     after = ts_list[pos]
     return before if abs(before - target) <= abs(after - target) else after
+
 
 def find_matching_frames(mocap_data, rs_data, threshold=30):
     """
@@ -37,9 +38,10 @@ def find_matching_frames(mocap_data, rs_data, threshold=30):
             matched_pairs[mocap_t] = rs_t
     return matched_pairs
 
+
 def filter_matching_data(mocap_data, rs_data, matched_pairs):
     """
-    Filter matching data from mocap and rs
+    Filter matching data from mocap and rs.
 
     Returns:
         mocap_matched, rs_matched: matched data (use mocap's timestamp)
@@ -52,7 +54,7 @@ def filter_matching_data(mocap_data, rs_data, matched_pairs):
         if m_pts is None or r_pts is None:
             continue
         mocap_matched[mocap_t] = m_pts
-        rs_matched[mocap_t] = r_pts # Note: match to mocap's timestamp
+        rs_matched[mocap_t] = r_pts  # Note: match to mocap's timestamp
 
     assert len(mocap_matched) == len(rs_matched)
 
@@ -100,7 +102,9 @@ def split_timestamps_by_ratio(timestamps, calibration_ratio=None):
             "Expected None or a float in (0, 1)."
         )
     if len(ordered_timestamps) < 2:
-        raise ValueError("At least two timestamps are required when splitting calibration and evaluation data.")
+        raise ValueError(
+            "At least two timestamps are required when splitting calibration and evaluation data."
+        )
 
     calibration_count = int(len(ordered_timestamps) * calibration_ratio)
     calibration_count = min(max(calibration_count, 1), len(ordered_timestamps) - 1)
@@ -159,7 +163,7 @@ def build_interpolated_reference(data_dict, target_timestamps, *, max_gap_ms=100
     return interpolated
 
 
-def evaluate_predictions(reference_dict, predicted_dict, *, print_summary=True):
+def evaluate_predictions(reference_dict, predicted_dict, marker_names, *, print_summary=True):
     """在共享时间戳上，将预测结果与参考数据进行误差评估。"""
     common_timestamps = get_common_timestamps(reference_dict, predicted_dict)
     if not common_timestamps:
@@ -171,7 +175,12 @@ def evaluate_predictions(reference_dict, predicted_dict, *, print_summary=True):
     reference_vec = np.vstack(list(reference.values()))
     predicted_vec = np.vstack(list(predicted.values()))
 
-    error_stats = compute_detailed_errors(reference_vec, predicted_vec, print_summary=print_summary)
+    error_stats = compute_detailed_errors(
+        reference_vec,
+        predicted_vec,
+        marker_names,
+        print_summary=print_summary,
+    )
     errors = np.linalg.norm(predicted_vec - reference_vec, axis=1)
 
     return {
@@ -185,8 +194,8 @@ def evaluate_predictions(reference_dict, predicted_dict, *, print_summary=True):
 
 def compute_rigid_transform(A_dict, B_dict):
     """
-    Computer the rigid transformation matrices
-    
+    Computer the rigid transformation matrices.
+
     Returns:
         R, t such that R @ A.T + t[:,None] ~= B.T
     """
@@ -206,14 +215,15 @@ def compute_rigid_transform(A_dict, B_dict):
     t = centroid_B - R_mat @ centroid_A
     return R_mat, t
 
+
 def apply_rigid_transform(A_dict, R, t):
     """
     Apply rigid-body transform (R, t) to each coordinate array in A_dict.
 
     Args:
         A_dict: dict[timestamp] -> array-like of shape (n_markers, 3)
-        R:   (3x3) rotation matrix
-        t:   (3,) translation vector
+        R: (3x3) rotation matrix
+        t: (3,) translation vector
 
     Returns:
         dict[timestamp] -> np.ndarray of shape (n_markers, 3)
@@ -225,6 +235,7 @@ def apply_rigid_transform(A_dict, R, t):
         arr_trans = (R @ arr.T).T + t             # apply R then t
         transformed[ts] = arr_trans               # store back
     return transformed
+
 
 def compute_rigid_transforms_per_marker(A_dict, B_dict):
     """
@@ -243,13 +254,16 @@ def compute_rigid_transforms_per_marker(A_dict, B_dict):
     # ensure same frames
     keys = sorted(A_dict.keys())
     assert set(keys) == set(B_dict.keys()), "Mismatch in timestamps"
-    
+    if not keys:
+        raise ValueError("At least one timestamp is required to compute per-marker transforms.")
+
+    n_markers = np.asarray(A_dict[keys[0]], dtype=float).shape[0]
     transforms = {}
-    for i in range(config.N_MARKERS):
+    for i in range(n_markers):
         # stack marker i across time
         A_i = np.vstack([A_dict[t][i] for t in keys])   # shape (N,3)
         B_i = np.vstack([B_dict[t][i] for t in keys])   # shape (N,3)
-        
+
         # compute Kabsch
         centroid_A = A_i.mean(axis=0)
         centroid_B = B_i.mean(axis=0)
@@ -259,10 +273,10 @@ def compute_rigid_transforms_per_marker(A_dict, B_dict):
         U, _, Vt = np.linalg.svd(H)
         R = Vt.T @ U.T
         if np.linalg.det(R) < 0:
-            Vt[-1,:] *= -1
+            Vt[-1, :] *= -1
             R = Vt.T @ U.T
         t = centroid_B - R @ centroid_A
-        
+
         transforms[i] = (R, t)
     return transforms
 
@@ -282,46 +296,51 @@ def apply_rigid_transforms_per_marker(A_dict, transforms):
             transformed[i] = (R @ pts[i]) + t
         out[ts] = transformed
     return out
-    
-def compute_detailed_errors(mocap_vec, rs_vec, print_summary=True):
+
+
+def compute_detailed_errors(mocap_vec, rs_vec, marker_names, print_summary=True):
     """
     Compute rigid alignment and return detailed error breakdown per marker.
 
     Returns:
         error_summary: dict[label] -> {mean, std, max, all_errors}
     """
+    n_markers = len(marker_names)
     errors = np.linalg.norm(rs_vec - mocap_vec, axis=1)  # shape (N * n_markers,)
     error_summary = {}
 
-    for i in range(config.N_MARKERS):  # marker index 0 to n_markers
-        marker_errors = errors[i::config.N_MARKERS]
-        error_summary[f"{config.NAMES[i]}"] = {
+    for i, marker_name in enumerate(marker_names):
+        marker_errors = errors[i::n_markers]
+        error_summary[marker_name] = {
             "mean": marker_errors.mean(),
             "std": marker_errors.std(),
             "max": marker_errors.max(),
-            "all": marker_errors
+            "all": marker_errors,
         }
 
     if print_summary:
-        #print("=== Per-Marker Error Summary ===")
-        for k, v in error_summary.items():
-            print(f"{k}: mean={v['mean']:.2f} mm | std={v['std']:.2f} mm")
+        # print("=== Per-Marker Error Summary ===")
+        for marker_name, stats in error_summary.items():
+            print(f"{marker_name}: mean={stats['mean']:.2f} mm | std={stats['std']:.2f} mm")
 
-        overall = errors
         print("=== Overall Error Summary ===")
-        print(f"Mean error: {overall.mean():.2f} mm")
-        print(f"Std  error: {overall.std():.2f} mm")
-        print(f"Max  error: {overall.max():.2f} mm")
+        print(f"Mean error: {errors.mean():.2f} mm")
+        print(f"Std  error: {errors.std():.2f} mm")
+        print(f"Max  error: {errors.max():.2f} mm")
 
     return error_summary
 
-def detect_marker_anomalies(data_dict, *,
-                            eps=5,
-                            min_samples=5,
-                            metric='euclidean'):
+
+def detect_marker_anomalies(data_dict, *, eps=5, min_samples=5, metric="euclidean"):
     timestamps = sorted(data_dict.keys())
-    trajectories = {i: np.vstack([data_dict[t][i] for t in timestamps])
-                    for i in range(config.N_MARKERS)}
+    if not timestamps:
+        return {}, 0
+
+    n_markers = np.asarray(data_dict[timestamps[0]], dtype=float).shape[0]
+    trajectories = {
+        i: np.vstack([data_dict[t][i] for t in timestamps])
+        for i in range(n_markers)
+    }
 
     anomalies = {}
     num = 0
