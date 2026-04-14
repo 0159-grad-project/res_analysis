@@ -1,8 +1,8 @@
 num_hands = 2
 num_cameras = 2
-date = '0322'
-time = '1939'
-system_delay = 17815
+date = '0409'
+time = '1259'
+system_delay = 23677
 show_visualizer = True
 
 from pathlib import Path
@@ -13,18 +13,25 @@ import config
 config.configure(num_hands=num_hands)
 
 from acquisition_utils import load_mocap_log, load_realsense_log
+from fusion_utils import analyze_weighted_fusion
 from processing_utils import (
+    apply_rigid_transform,
     apply_rigid_transforms_per_marker,
+    build_interpolated_reference,
     compute_detailed_errors,
+    compute_rigid_transform,
     compute_rigid_transforms_per_marker,
     detect_marker_anomalies,
-    filter_matching_data,
-    find_matching_frames,
+    filter_data_by_timestamps,
+    split_timestamps_by_ratio,
 )
 from visualizer import MarkerVisualizer
 
 
-MATCH_THRESHOLD_MS = 10
+ALIGNMENT_MODE = "per_marker"  # per_camera
+CALIBRATION_RATIO = 0.2  # None means using all frames for both transform and error
+MOCAP_INTERP_MAX_GAP_MS = 30
+CAMERA_PAIR_THRESHOLD_MS = 30
 ANOMALY_EPS = 50
 ANOMALY_MIN_SAMPLES = 20
 
@@ -44,24 +51,6 @@ def summarize_overall_errors(errors):
     print(f"Mean error: {errors.mean():.2f} mm")
     print(f"Std  error: {errors.std():.2f} mm")
     print(f"Max  error: {errors.max():.2f} mm")
-
-
-def print_total_error_summary(camera_results):
-    print("\n=== Total Error Summary (All Cameras Combined) ===")
-
-    for marker_name in config.NAMES:
-        marker_errors = np.concatenate([
-            result["error_stats"][marker_name]["all"]
-            for result in camera_results
-        ])
-        print(
-            f"{marker_name}: mean={marker_errors.mean():.2f} mm | "
-            f"std={marker_errors.std():.2f} mm | "
-            f"max={marker_errors.max():.2f} mm"
-        )
-
-    combined_errors = np.concatenate([result["errors"] for result in camera_results])
-    summarize_overall_errors(combined_errors)
 
 
 def remove_realsense_anomalies(rs_data, camera_label):
@@ -96,31 +85,87 @@ def analyze_camera(mc_data, camera_idx):
 
     print(f"\n=== {camera_label} vs mocap ===")
     print(f"Total {camera_label} frames: {len(rs_data)}")
+    print(f"Alignment mode: {ALIGNMENT_MODE}")
 
     rs_data = remove_realsense_anomalies(rs_data, camera_label)
 
-    matched_pairs = find_matching_frames(mc_data, rs_data, threshold=MATCH_THRESHOLD_MS)
-    print(f"Matched frame count: {len(matched_pairs)}")
-    if not matched_pairs:
-        raise ValueError(f"No matched frames found for {camera_label}.")
+    mocap_reference = build_interpolated_reference(
+        mc_data,
+        sorted(rs_data.keys()),
+        max_gap_ms=MOCAP_INTERP_MAX_GAP_MS,
+    )
+    print(f"Interpolated mocap frame count: {len(mocap_reference)}")
+    if not mocap_reference:
+        raise ValueError(f"No interpolated mocap frames found for {camera_label}.")
 
-    mocap_matched, rs_matched = filter_matching_data(mc_data, rs_data, matched_pairs)
+    rs_reference = {
+        timestamp: np.asarray(rs_data[timestamp], dtype=float)
+        for timestamp in mocap_reference
+    }
+    calibration_timestamps, evaluation_timestamps = split_timestamps_by_ratio(
+        mocap_reference.keys(),
+        calibration_ratio=CALIBRATION_RATIO,
+    )
 
-    transformations = compute_rigid_transforms_per_marker(rs_matched, mocap_matched)
-    rs_transformed = apply_rigid_transforms_per_marker(rs_matched, transformations)
+    if CALIBRATION_RATIO is None:
+        print(
+            f"Using all {len(calibration_timestamps)} interpolated frames "
+            "for both coordinate transform and error computation."
+        )
+    else:
+        print(f"Calibration ratio: {CALIBRATION_RATIO:.0%}")
+        print(f"Calibration frame count: {len(calibration_timestamps)}")
+        print(f"Evaluation frame count: {len(evaluation_timestamps)}")
 
-    mocap_vec = np.vstack(list(mocap_matched.values()))
+    mocap_calibration = filter_data_by_timestamps(mocap_reference, calibration_timestamps)
+    rs_calibration = filter_data_by_timestamps(rs_reference, calibration_timestamps)
+    mocap_evaluation = filter_data_by_timestamps(mocap_reference, evaluation_timestamps)
+
+    transform = None
+    if ALIGNMENT_MODE == "per_marker":
+        transform = compute_rigid_transforms_per_marker(rs_calibration, mocap_calibration)
+        rs_transformed_all = apply_rigid_transforms_per_marker(rs_data, transform)
+    elif ALIGNMENT_MODE == "per_camera":
+        rotation, translation = compute_rigid_transform(rs_calibration, mocap_calibration)
+        transform = (rotation, translation)
+        rs_transformed_all = apply_rigid_transform(rs_data, rotation, translation)
+    else:
+        raise ValueError(
+            f"Unsupported ALIGNMENT_MODE={ALIGNMENT_MODE}. "
+            "Expected 'per_marker' or 'per_camera'."
+        )
+
+    rs_transformed_calibration = filter_data_by_timestamps(rs_transformed_all, calibration_timestamps)
+    rs_transformed = filter_data_by_timestamps(rs_transformed_all, evaluation_timestamps)
+    rs_transformed_for_fusion = rs_transformed
+
+    mocap_vec = np.vstack(list(mocap_evaluation.values()))
     rs_vec = np.vstack(list(rs_transformed.values()))
 
     error_stats = compute_detailed_errors(mocap_vec, rs_vec)
     errors = np.linalg.norm(rs_vec - mocap_vec, axis=1)
+    weight_error_stats = error_stats
+    if CALIBRATION_RATIO is not None:
+        calibration_mocap_vec = np.vstack(list(mocap_calibration.values()))
+        calibration_rs_vec = np.vstack(list(rs_transformed_calibration.values()))
+        weight_error_stats = compute_detailed_errors(
+            calibration_mocap_vec,
+            calibration_rs_vec,
+            print_summary=False,
+        )
 
     return {
         "camera_label": camera_label,
-        "mocap_matched": mocap_matched,
+        "mocap_matched": mocap_evaluation,
         "rs_transformed": rs_transformed,
+        "rs_transformed_all": rs_transformed_all,
+        "rs_transformed_for_fusion": rs_transformed_for_fusion,
         "error_stats": error_stats,
+        "weight_error_stats": weight_error_stats,
         "errors": errors,
+        "transform": transform,
+        "calibration_timestamps": calibration_timestamps,
+        "evaluation_timestamps": evaluation_timestamps,
     }
 
 
@@ -137,23 +182,34 @@ print(f"Total mocap frames: {len(mc)}")
 
 camera_indices = [1] if num_cameras == 1 else [1, 2]
 camera_results = [analyze_camera(mc, camera_idx) for camera_idx in camera_indices]
+fused_result = None
 
 if num_cameras == 2:
-    print_total_error_summary(camera_results)
+    fused_result = analyze_weighted_fusion(
+        camera_results,
+        mc,
+        pair_threshold_ms=CAMERA_PAIR_THRESHOLD_MS,
+        mocap_interp_max_gap_ms=MOCAP_INTERP_MAX_GAP_MS,
+    )
 
 
 if show_visualizer:
     mocap_labels = ["(mc)" + name for name in config.NAMES]
     rs_labels = ["(rs)" + name for name in config.NAMES]
-    visualized_result = camera_results[1]
+    fused_labels = ["(fused)" + name for name in config.NAMES]
+    visualized_result = camera_results[0]
+    visualized_labels = rs_labels
+
+    num_cameras = 1
 
     if num_cameras == 2:
-        print("\nVisualizer shows mocap and cam1 after alignment.")
+        visualized_result = fused_result
+        visualized_labels = fused_labels
 
     vis = MarkerVisualizer(
         data_dict1=visualized_result["mocap_matched"],
-        data_dict2=visualized_result["rs_transformed"],
+        data_dict2=visualized_result["fused_points"] if num_cameras == 2 else visualized_result["rs_transformed"],
         labels1=mocap_labels,
-        labels2=rs_labels,
+        labels2=visualized_labels,
     )
     vis.show()

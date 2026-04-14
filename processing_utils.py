@@ -59,6 +59,130 @@ def filter_matching_data(mocap_data, rs_data, matched_pairs):
     return mocap_matched, rs_matched
 
 
+def get_common_timestamps(*data_dicts):
+    """返回所有输入字典共享的时间戳交集，并按时间排序。"""
+    if not data_dicts:
+        return []
+
+    common_timestamps = set(data_dicts[0].keys())
+    for data_dict in data_dicts[1:]:
+        common_timestamps &= set(data_dict.keys())
+
+    return sorted(common_timestamps)
+
+
+def filter_data_by_timestamps(data_dict, timestamps):
+    """仅保留指定时间戳的数据，并统一转成 float 数组。"""
+    return {
+        timestamp: np.asarray(data_dict[timestamp], dtype=float)
+        for timestamp in timestamps
+        if timestamp in data_dict
+    }
+
+
+def split_timestamps_by_ratio(timestamps, calibration_ratio=None):
+    """
+    将按时间排序的数据切分为前段标定集和后段评估集。
+
+    当 calibration_ratio 为 None 时，表示沿用旧模式：
+    全部数据同时用于坐标变换和误差评估。
+    """
+    ordered_timestamps = sorted(timestamps)
+    if not ordered_timestamps:
+        return [], []
+
+    if calibration_ratio is None:
+        return ordered_timestamps, ordered_timestamps
+
+    if not 0 < calibration_ratio < 1:
+        raise ValueError(
+            f"Unsupported calibration_ratio={calibration_ratio}. "
+            "Expected None or a float in (0, 1)."
+        )
+    if len(ordered_timestamps) < 2:
+        raise ValueError("At least two timestamps are required when splitting calibration and evaluation data.")
+
+    calibration_count = int(len(ordered_timestamps) * calibration_ratio)
+    calibration_count = min(max(calibration_count, 1), len(ordered_timestamps) - 1)
+
+    return (
+        ordered_timestamps[:calibration_count],
+        ordered_timestamps[calibration_count:],
+    )
+
+
+def interpolate_points_at_timestamp(data_dict, target_timestamp, *, sorted_timestamps=None, max_gap_ms=100):
+    """
+    在任意目标时间戳上，对 3D marker 位置做线性插值。
+
+    只有当目标时间戳两侧的 mocap 帧间隔足够小，才允许插值；
+    否则认为该时刻缺少可靠参考值。
+    """
+    if not data_dict:
+        return None
+
+    timestamps = sorted_timestamps if sorted_timestamps is not None else sorted(data_dict.keys())
+    pos = bisect_left(timestamps, target_timestamp)
+
+    if pos < len(timestamps) and timestamps[pos] == target_timestamp:
+        return np.asarray(data_dict[target_timestamp], dtype=float)
+    if pos == 0 or pos == len(timestamps):
+        return None
+
+    left_ts = timestamps[pos - 1]
+    right_ts = timestamps[pos]
+    gap = right_ts - left_ts
+    if gap <= 0 or gap > max_gap_ms:
+        return None
+
+    left_pts = np.asarray(data_dict[left_ts], dtype=float)
+    right_pts = np.asarray(data_dict[right_ts], dtype=float)
+    alpha = (target_timestamp - left_ts) / gap
+    return (1.0 - alpha) * left_pts + alpha * right_pts
+
+
+def build_interpolated_reference(data_dict, target_timestamps, *, max_gap_ms=100):
+    """对每个目标时间戳做插值，构造时间对齐后的参考数据字典。"""
+    sorted_timestamps = sorted(data_dict.keys())
+    interpolated = {}
+
+    for timestamp in target_timestamps:
+        points = interpolate_points_at_timestamp(
+            data_dict,
+            timestamp,
+            sorted_timestamps=sorted_timestamps,
+            max_gap_ms=max_gap_ms,
+        )
+        if points is not None:
+            interpolated[timestamp] = points
+
+    return interpolated
+
+
+def evaluate_predictions(reference_dict, predicted_dict, *, print_summary=True):
+    """在共享时间戳上，将预测结果与参考数据进行误差评估。"""
+    common_timestamps = get_common_timestamps(reference_dict, predicted_dict)
+    if not common_timestamps:
+        raise ValueError("No common timestamps available for evaluation.")
+
+    reference = filter_data_by_timestamps(reference_dict, common_timestamps)
+    predicted = filter_data_by_timestamps(predicted_dict, common_timestamps)
+
+    reference_vec = np.vstack(list(reference.values()))
+    predicted_vec = np.vstack(list(predicted.values()))
+
+    error_stats = compute_detailed_errors(reference_vec, predicted_vec, print_summary=print_summary)
+    errors = np.linalg.norm(predicted_vec - reference_vec, axis=1)
+
+    return {
+        "timestamps": common_timestamps,
+        "reference": reference,
+        "predicted": predicted,
+        "error_stats": error_stats,
+        "errors": errors,
+    }
+
+
 def compute_rigid_transform(A_dict, B_dict):
     """
     Computer the rigid transformation matrices
@@ -181,7 +305,7 @@ def compute_detailed_errors(mocap_vec, rs_vec, print_summary=True):
     if print_summary:
         #print("=== Per-Marker Error Summary ===")
         for k, v in error_summary.items():
-            print(f"{k}: mean={v['mean']:.2f} mm | std={v['std']:.2f} mm | max={v['max']:.2f} mm")
+            print(f"{k}: mean={v['mean']:.2f} mm | std={v['std']:.2f} mm")
 
         overall = errors
         print("=== Overall Error Summary ===")
