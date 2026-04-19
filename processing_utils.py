@@ -303,7 +303,7 @@ def compute_detailed_errors(mocap_vec, rs_vec, marker_names, print_summary=True)
     Compute rigid alignment and return detailed error breakdown per marker.
 
     Returns:
-        error_summary: dict[label] -> {mean, std, max, all_errors}
+        error_summary: dict[label] -> {mean, median, std, max, all_errors}
     """
     n_markers = len(marker_names)
     errors = np.linalg.norm(rs_vec - mocap_vec, axis=1)  # shape (N * n_markers,)
@@ -313,20 +313,22 @@ def compute_detailed_errors(mocap_vec, rs_vec, marker_names, print_summary=True)
         marker_errors = errors[i::n_markers]
         error_summary[marker_name] = {
             "mean": marker_errors.mean(),
+            "median": np.median(marker_errors),
             "std": marker_errors.std(),
             "max": marker_errors.max(),
             "all": marker_errors,
         }
 
     if print_summary:
-        # print("=== Per-Marker Error Summary ===")
+        print("=== Per-Marker Error Summary ===")
+        label_width = max(len(marker_name) for marker_name in error_summary)
         for marker_name, stats in error_summary.items():
-            print(f"{marker_name}: mean={stats['mean']:.2f} mm | std={stats['std']:.2f} mm")
+            print(f"{marker_name:<{label_width}}: mean={stats['mean']:.2f} mm | median={stats['median']:.2f} mm")
 
         print("=== Overall Error Summary ===")
         print(f"Mean error: {errors.mean():.2f} mm")
+        print(f"Median error: {np.median(errors):.2f} mm")
         print(f"Std  error: {errors.std():.2f} mm")
-        print(f"Max  error: {errors.max():.2f} mm")
 
     return error_summary
 

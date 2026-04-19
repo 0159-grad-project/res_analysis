@@ -1,14 +1,20 @@
 import ast
+import os
+import tempfile
+from pathlib import Path
 
-INPUT_FILE = "logs\\0113_1949_mocap_log.txt"
-OUTPUT_FILE = "data_swapped.log"
+INPUT_FILE = "logs/0409_1257_mocap_log.txt"
+OUTPUT_FILE = INPUT_FILE
+# OUTPUT_FILE = INPUT_FILE.replace(".txt", "_swapped.txt")
 
 # ====== 从这个时间戳开始生效（包含这一行）======
-START_TS = 1768304988047   # ← 改成你要的那一行时间戳
+ts = 1775710658744   # ← 改成你要的那一行时间戳
+system_delay = 23659
+START_TS = ts - system_delay
 
 # 要交换的两个 index（从 0 开始）
 I = 2
-J = 5
+J = 6
 
 
 def process_line(line: str):
@@ -48,16 +54,32 @@ def process_line(line: str):
 def main():
     changed = 0
     total = 0
+    output_path = Path(OUTPUT_FILE)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    temp_file = None
 
-    with open(INPUT_FILE, "r", encoding="utf-8") as fin, \
-        open(OUTPUT_FILE, "w", encoding="utf-8") as fout:
+    try:
+        with open(INPUT_FILE, "r", encoding="utf-8") as fin:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                encoding="utf-8",
+                delete=False,
+                dir=output_path.parent,
+            ) as fout:
+                temp_file = fout.name
 
-        for line in fin:
-            total += 1
-            new_line, modified = process_line(line)
-            if modified:
-                changed += 1
-            fout.write(new_line + "\n")
+                for line in fin:
+                    total += 1
+                    new_line, modified = process_line(line)
+                    if modified:
+                        changed += 1
+                    fout.write(new_line + "\n")
+    except Exception:
+        if temp_file and os.path.exists(temp_file):
+            os.remove(temp_file)
+        raise
+
+    os.replace(temp_file, OUTPUT_FILE)
 
     print("✅ 处理完成")
     print(f"总行数: {total}")

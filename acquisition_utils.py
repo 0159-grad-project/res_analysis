@@ -32,6 +32,7 @@ def load_mocap_log(path, num_hands, system_delay):
 
                 if marker_order is None:
                     marker_order = get_mocap_marker_order(points, num_hands)
+                    # print(f"Inferred mocap marker order: {marker_order}")
 
                 mocap_data[int(timestamp) + system_delay] = points[marker_order]
 

@@ -1,18 +1,20 @@
-num_hands = 2
+date = '0415'
+time = '1515'
 num_cameras = 2
-date = '0409'
-time = '1259'
-system_delay = 23677
-show_visualizer = True
+num_hands = None  # Set to None to infer from the mocap log.
+show_visualizer = False
+system_delay = None  # Set to None to enable automatic estimation, or specify a fixed delay in ms
+ALIGNMENT_MODE = "per_marker"  # per_camera
+CALIBRATION_RATIO = 0.2  # None means using all frames for both transform and error
 
 from pathlib import Path
 
 import numpy as np
 
 import config
-MARKER_NAMES = config.get_marker_names(num_hands)
 
 from acquisition_utils import load_mocap_log, load_realsense_log
+from estimate_system_delay import estimate_system_delay, infer_num_hands_from_mocap
 from fusion_utils import analyze_weighted_fusion
 from processing_utils import (
     apply_rigid_transform,
@@ -28,8 +30,6 @@ from processing_utils import (
 from visualizer import MarkerVisualizer
 
 
-ALIGNMENT_MODE = "per_marker"  # per_camera
-CALIBRATION_RATIO = 0.2  # None means using all frames for both transform and error
 MOCAP_INTERP_MAX_GAP_MS = 30
 CAMERA_PAIR_THRESHOLD_MS = 30
 ANOMALY_EPS = 50
@@ -44,13 +44,6 @@ def get_realsense_log_path(camera_idx):
     if num_cameras == 1:
         return Path(f'./logs/{date}_{time}_realsense_log.txt')
     return Path(f'./logs/{date}_{time}_cam{camera_idx}_realsense_log.txt')
-
-
-def summarize_overall_errors(errors):
-    print("=== Overall Error Summary ===")
-    print(f"Mean error: {errors.mean():.2f} mm")
-    print(f"Std  error: {errors.std():.2f} mm")
-    print(f"Max  error: {errors.max():.2f} mm")
 
 
 def remove_realsense_anomalies(rs_data, camera_label):
@@ -88,7 +81,7 @@ def analyze_camera(mc_data, camera_idx):
 
     print(f"\n=== {camera_label} vs mocap ===")
     print(f"Total {camera_label} frames: {len(rs_data)}")
-    print(f"Alignment mode: {ALIGNMENT_MODE}")
+    # print(f"Alignment mode: {ALIGNMENT_MODE}")
 
     rs_data = remove_realsense_anomalies(rs_data, camera_label)
 
@@ -110,15 +103,15 @@ def analyze_camera(mc_data, camera_idx):
         calibration_ratio=CALIBRATION_RATIO,
     )
 
-    if CALIBRATION_RATIO is None:
-        print(
-            f"Using all {len(calibration_timestamps)} interpolated frames "
-            "for both coordinate transform and error computation."
-        )
-    else:
-        print(f"Calibration ratio: {CALIBRATION_RATIO:.0%}")
-        print(f"Calibration frame count: {len(calibration_timestamps)}")
-        print(f"Evaluation frame count: {len(evaluation_timestamps)}")
+    # if CALIBRATION_RATIO is None:
+    #     print(
+    #         f"Using all {len(calibration_timestamps)} interpolated frames "
+    #         "for both coordinate transform and error computation."
+    #     )
+    # else:
+    #     print(f"Calibration ratio: {CALIBRATION_RATIO:.0%}")
+    #     print(f"Calibration frame count: {len(calibration_timestamps)}")
+    #     print(f"Evaluation frame count: {len(evaluation_timestamps)}")
 
     mocap_calibration = filter_data_by_timestamps(mocap_reference, calibration_timestamps)
     rs_calibration = filter_data_by_timestamps(rs_reference, calibration_timestamps)
@@ -184,10 +177,42 @@ mocap_path = get_mocap_log_path()
 if not mocap_path.exists():
     raise FileNotFoundError(f"Missing mocap log: {mocap_path}")
 
+if num_hands is None:
+    num_hands = infer_num_hands_from_mocap(mocap_path)
+    print(f"Inferred num_hands: {num_hands}")
+
+MARKER_NAMES = config.get_marker_names(num_hands)
+
+camera_indices = [1] if num_cameras == 1 else [1, 2]
+if system_delay is None:
+    delay_results = [
+        estimate_system_delay(
+            mocap_path,
+            get_realsense_log_path(camera_idx),
+            num_hands=num_hands,
+        )
+        for camera_idx in camera_indices
+    ]
+
+    if num_cameras == 1:
+        system_delay = delay_results[0]["delay_ms"]
+        print(f"Estimated system_delay: {system_delay} ms")
+    else:
+        system_delay = int(round(np.mean([result["delay_ms"] for result in delay_results])))
+        average_mean_frame_error = float(np.mean([result["mean_frame_error_mm"] for result in delay_results]))
+        # for camera_idx, result in zip(camera_indices, delay_results):
+        #     print(
+        #         f"Camera {camera_idx} estimated system_delay: {result['delay_ms']} ms "
+        #         f"(mean frame error: {result['mean_frame_error_mm']:.2f} mm)"
+        #     )
+        print(f"Averaged system_delay: {system_delay} ms")
+        # print(f"Average estimated mean frame error: {average_mean_frame_error:.2f} mm")
+else:
+    print(f"Using manual system_delay: {system_delay} ms")
+
 mc = load_mocap_log(str(mocap_path), num_hands=num_hands, system_delay=system_delay)
 print(f"Total mocap frames: {len(mc)}")
 
-camera_indices = [1] if num_cameras == 1 else [1, 2]
 camera_results = [analyze_camera(mc, camera_idx) for camera_idx in camera_indices]
 fused_result = None
 
