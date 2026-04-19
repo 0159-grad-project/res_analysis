@@ -1,5 +1,5 @@
 date = '0415'
-time = '1515'
+time = '1513'
 num_cameras = 2
 num_hands = None  # Set to None to infer from the mocap log.
 show_visualizer = False
@@ -27,7 +27,7 @@ from processing_utils import (
     filter_data_by_timestamps,
     split_timestamps_by_ratio,
 )
-from visualizer import MarkerVisualizer
+from visualizer import MarkerVisualizer, plot_marker_error_histogram
 
 
 MOCAP_INTERP_MAX_GAP_MS = 30
@@ -247,3 +247,6 @@ if show_visualizer:
         num_hands=num_hands,
     )
     vis.show()
+
+    histogram_result = fused_result if fused_result is not None else camera_results[0]
+    plot_marker_error_histogram(histogram_result["error_stats"])
