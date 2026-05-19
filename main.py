@@ -1,8 +1,8 @@
-date = '0415'
-time = '1513'
-num_cameras = 2
+date = '0122'
+time = '1855'
+num_cameras = 1
 num_hands = None  # Set to None to infer from the mocap log.
-show_visualizer = False
+show_visualizer = True
 system_delay = None  # Set to None to enable automatic estimation, or specify a fixed delay in ms
 ALIGNMENT_MODE = "per_marker"  # per_camera
 CALIBRATION_RATIO = 0.2  # None means using all frames for both transform and error
@@ -29,6 +29,9 @@ from processing_utils import (
 )
 from visualizer import MarkerVisualizer, plot_marker_error_histogram
 
+BASE_DIR = Path(__file__).resolve().parent
+LOG_DIR = BASE_DIR / "logs"
+
 
 MOCAP_INTERP_MAX_GAP_MS = 30
 CAMERA_PAIR_THRESHOLD_MS = 30
@@ -37,13 +40,13 @@ ANOMALY_MIN_SAMPLES = 20
 
 
 def get_mocap_log_path():
-    return Path(f'./logs/{date}_{time}_mocap_log.txt')
+    return LOG_DIR / f'{date}_{time}_mocap_log.txt'
 
 
 def get_realsense_log_path(camera_idx):
     if num_cameras == 1:
-        return Path(f'./logs/{date}_{time}_realsense_log.txt')
-    return Path(f'./logs/{date}_{time}_cam{camera_idx}_realsense_log.txt')
+        return LOG_DIR / f'{date}_{time}_realsense_log.txt'
+    return LOG_DIR / f'{date}_{time}_cam{camera_idx}_realsense_log.txt'
 
 
 def remove_realsense_anomalies(rs_data, camera_label):
@@ -79,7 +82,7 @@ def analyze_camera(mc_data, camera_idx):
         num_hands=num_hands,
     )
 
-    print(f"\n=== {camera_label} vs mocap ===")
+    print(f"=== {camera_label} vs mocap ===")
     print(f"Total {camera_label} frames: {len(rs_data)}")
     # print(f"Alignment mode: {ALIGNMENT_MODE}")
 

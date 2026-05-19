@@ -6,9 +6,12 @@ import numpy as np
 from acquisition_utils import load_mocap_log, load_realsense_log
 from processing_utils import compute_rigid_transform, interpolate_points_at_timestamp
 
+BASE_DIR = Path(__file__).resolve().parent
+LOG_DIR = BASE_DIR / "logs"
+
 # ====== Configure here ======
-MOCAP_LOG_PATH = Path("./logs/0409_1253_mocap_log.txt")
-CAMERA_LOG_PATH = Path("./logs/0409_1253_cam1_realsense_log.txt")
+MOCAP_LOG_PATH = LOG_DIR / "0409_1253_mocap_log.txt"
+CAMERA_LOG_PATH = LOG_DIR / "0409_1253_cam1_realsense_log.txt"
 
 # Set to None to infer automatically from the mocap log.
 NUM_HANDS = None
@@ -21,7 +24,15 @@ CALIBRATION_RATIO = 0.2
 MIN_MATCHED_FRAMES = 30
 
 
+def resolve_path(path):
+    path = Path(path)
+    if path.is_absolute():
+        return path
+    return BASE_DIR / path
+
+
 def infer_num_hands_from_mocap(path):
+    path = resolve_path(path)
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -281,6 +292,9 @@ def estimate_system_delay(
         raise ValueError("min_delay_ms must be <= max_delay_ms.")
     if not 0.0 < calibration_ratio < 1.0:
         raise ValueError("calibration_ratio must be in (0, 1).")
+
+    mocap_log_path = resolve_path(mocap_log_path)
+    camera_log_path = resolve_path(camera_log_path)
 
     num_hands = num_hands or infer_num_hands_from_mocap(mocap_log_path)
     mocap_data = load_mocap_log(mocap_log_path, num_hands, system_delay=0)
